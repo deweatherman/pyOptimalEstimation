@@ -500,6 +500,73 @@ class optimalEstimation(object):
 
         return jacobian_x, jacobian_b
 
+    def getJacobian_external_np(self, xb, y):
+        r'''
+        Author: M. Echeverri, May 2022.
+
+        Estimate Jacobian using the external function provided by user and 
+        the specified perturbation. This method has external dependencies 
+        Avoid using Pandas DataFrame as much as possible; also avoiding indexing loops.
+        Less flexible but faster (with the right combination of external functions, split
+        merge, etc.)
+
+        Parameters
+        ----------
+        xb  : pd.Series or list or np.ndarray
+          combination of state vector x and parameter vector b
+        y : pd.Series or list or np.ndarray
+          measurement vector for xb
+
+        Returns
+        -------
+        pd.DataFrame
+          Jacobian around x
+        pd.DataFrame
+          Jacobian around b
+        '''
+
+        xb_vars = self.x_vars + self.b_vars
+
+        # If a factor is used to perturb xb, xb must not be zero.
+        assert not (self.useFactorInJac and np.any(xb == 0))
+
+
+        # perturbations == perturbation, but perturbation is only a numpy array
+        # order in elements of "perturbation" follows xb_vars.
+
+        perturbation = np.zeros((len(xb_vars),), dtype=np.float64)
+        
+        if type(self.perturbation) == float: # if self.perturbation is float then creating perturbations dict is not needed
+            perturbation[:] = self.perturbation
+        elif type(self.perturbation) == dict:
+            perturbations = self.perturbation
+            i = 0
+            for key, value in perturbations.items():
+                perturbation[i] = value
+                i += 1
+        else:
+            raise TypeError("perturbation must be type dict or float")
+
+        # Adding str "perturbed", adds overhead (due to looping necessary for indexing): this seems to be not so helpful at this level 
+
+        # Compute Jacobian using user's Jacobian function
+
+        jac_numpy = self.userJacobian(xb, self.perturbation,
+                                      self.y_vars, **self.forwardKwArgs)
+
+        # Assemble  Jacobian Dataframe:
+
+        jacobian = pd.DataFrame(jac_numpy,
+                                index=self.y_vars, columns=xb_vars) #perturbedKeys)                     
+
+        jacobian[np.isnan(jacobian) | np.isinf(jacobian)] = 0.
+        jacobian_x = jacobian.loc[:,list(dict.fromkeys(self.x_vars))]
+        jacobian_b = jacobian.loc[:,list(dict.fromkeys(self.b_vars))]
+        
+
+        return jacobian_x, jacobian_b
+
+
     def doRetrieval(self, maxIter=10, x_0=None, maxTime=1e7):
         r"""
         run the retrieval
@@ -561,7 +628,7 @@ class optimalEstimation(object):
 
             if (self.userJacobian != None):  # then user's Jacobian function is used
 
-                self.K_i[i], self.K_b_i[i] = self.getJacobian_external(
+                self.K_i[i], self.K_b_i[i] = self.getJacobian_external_np(
                     pd.concat((self.x_i[i], self.b_p)), self.y_i[i])
 
             else:                           # uses method getJacobian
@@ -587,13 +654,15 @@ class optimalEstimation(object):
             # S_ep inverted
             S_ep_inv = invertMatrix(self.S_ep_i[i])
 
-            assert np.all(self.y_perturbed.keys() == self.S_y.keys())
+            # Comment some assertions that do not apply when using 
+            # getJacobian_external (and getJacobian_external_np)
+            #assert np.all(self.y_perturbed.keys() == self.S_y.keys())
             assert np.all(self.S_y.keys() == self.K_i[i].index)
             assert np.all(self.S_a.index == self.x_a.index)
-            assert np.all(self.x_a.index.tolist(
-            )+self.b_p.index.tolist() == self.xb_perturbed.columns)
-            assert np.all(self.xb_perturbed.index.tolist(
-            ) == self.K_i[i].columns.tolist()+self.K_b_i[i].columns.tolist())
+            #assert np.all(self.x_a.index.tolist(
+            #)+self.b_p.index.tolist() == self.xb_perturbed.columns)
+            #assert np.all(self.xb_perturbed.index.tolist(
+            #) == self.K_i[i].columns.tolist()+self.K_b_i[i].columns.tolist())
 
             K = np.array(self.K_i[i])
 
